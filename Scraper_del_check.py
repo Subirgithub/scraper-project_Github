@@ -921,6 +921,7 @@ async def run_scrape_task(browser, site, search_term, group, pass_num):
     """
     context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
     page = await context.new_page()
+    
     try:
         print(f"\n[Pass {pass_num}] Starting task for product: '{search_term}' on site: '{site}'...")
         scraper_function = SCRAPER_WORKFLOWS.get(site)

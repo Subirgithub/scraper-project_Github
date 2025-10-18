@@ -67,22 +67,36 @@ SITE_CONFIG = {
         # --- ADD THIS NEW KEY ---
         "unavailable_selector": "#availability span:has-text('Currently unavailable.')",
        # "unavailable_selector": "#availability span:has-text('Currently unavailable.'), span.a-color-price:has-text('Currently unavailable.')",
-        "delivery_info_selectors": [
-        # --- ADD THIS NEW ENTRY AT THE TOP ---
+       "delivery_info_selectors": [
         {
             "type": "unserviceable",
             "selector": "//span[contains(text(), 'cannot be shipped to your selected delivery location')]"
         },
-        # --- Your existing selectors go here ---
         {
             "type": "primary_delivery",
-            "selector": "span[data-csa-c-content-id='DEXUnifiedCXPDM']"
+            "selector": "//span[@data-csa-c-content-id='DEXUnifiedCXPDM']"
         },
         {
             "type": "secondary_info",
-            "selector": "span[data-csa-c-content-id='DEXUnifiedCXSDM']"
+            "selector": "//span[@data-csa-c-content-id='DEXUnifiedCXSDM']"
         }
     ]
+    #     "delivery_info_selectors": [
+    #     # --- ADD THIS NEW ENTRY AT THE TOP ---
+    #     {
+    #         "type": "unserviceable",
+    #         "selector": "//span[contains(text(), 'cannot be shipped to your selected delivery location')]"
+    #     },
+    #     # --- Your existing selectors go here ---
+    #     {
+    #         "type": "primary_delivery",
+    #         "selector": "span[data-csa-c-content-id='DEXUnifiedCXPDM']"
+    #     },
+    #     {
+    #         "type": "secondary_info",
+    #         "selector": "span[data-csa-c-content-id='DEXUnifiedCXSDM']"
+    #     }
+    # ]
 },
     "Flipkart": {
     "initial_popup_close_selector": "button._2KpZ6l._2doB4z",
@@ -136,9 +150,13 @@ SITE_CONFIG = {
             "type": "primary_delivery", 
             "selector": "//span[contains(text(), 'Delivery by')]"
         },
+        # {
+        #     "type": "secondary_info", 
+        #     "selector": "//span[contains(text(), 'COD available')]"
+        # },
         {
-            "type": "secondary_info", 
-            "selector": "//span[contains(text(), 'COD available')]"
+            "type": "shipping_info",
+            "selector": "//span[contains(text(), 'Ships within')]"
         }
     ]
         
@@ -305,39 +323,49 @@ async def scrape_pincode_on_page_nykaa(page, site, pincode):
             # Initialize a dictionary to hold the results.
             results = {"primary": "Not found", "secondary": ""}
             
-            # Get the prioritized list of selectors from your config.
-            delivery_selectors = config.get("delivery_info_selectors", [])
-            
-            # Loop through each selector in the order they are listed.
-            for item in delivery_selectors:
-                item_type = item["type"]
-                selector = item["selector"]
+            try:
+                # 1. Get all possible delivery selector strings from your config.
+                delivery_selectors_config = config.get("delivery_info_selectors", [])
+                xpath_list = [item["selector"] for item in delivery_selectors_config]
                 
-                try:
-                    # Use a short timeout to quickly check if the element is visible.
-                    element = page.locator(selector).first
-                    await element.wait_for(state="visible", timeout=5000)
-                    
-                    # If the element is found, grab its text.
-                    text_content = (await element.inner_text()).strip()
-                    
-                    if item_type == "primary_delivery":
-                        results["primary"] = text_content
-                        
-                    elif item_type == "unserviceable":
-                        results["primary"] = text_content
-                        # This is a final status. We can stop checking.
-                        break
-                        
-                    elif item_type == "secondary_info":
-                        results["secondary"] = text_content
+                # 2. Correctly combine them into a single XPath string with the "|" (OR) operator.
+                combined_selector = " | ".join(xpath_list)
                 
-                except Exception:
-                    # It's normal for a selector not to be found. Just move to the next one.
-                    pass
+                print(f"--- Waiting for one of these elements to appear: {combined_selector} ---")
 
-            # If we reach here, the attempt was successful.
+                # 3. Wait for the FIRST element that matches ANY of the selectors to become visible.
+                result_locator = page.locator(combined_selector).first
+                await result_locator.wait_for(state="visible", timeout=10000)
+                
+                # 4. Once visible, get its text content directly. No need for another loop.
+                text_content = (await result_locator.inner_text()).strip()
+                results["primary"] = text_content
+                
+                print(f"--- Successfully captured: '{results['primary']}' ---")
+
+            except Exception as e:
+                # This will catch the timeout if none of the elements appear.
+                print(f"--- Timed out waiting for delivery info. Error: {e} ---")
+                results["primary"] = "Failed to get delivery info"
+
+            # for item in config.get("delivery_info_selectors", []):
+            #     try:
+            #         element = page.locator(item["selector"]).first
+            #         # Use a very short timeout here since we know one of the elements is already visible.
+            #         text_content = (await element.inner_text(timeout=1000)).strip()
+                    
+            #         if item["type"] == "primary_delivery":
+            #             results["primary"] = text_content
+            #             break # Stop once we have a valid delivery date
+            #         elif item["type"] == "unserviceable":
+            #             results["primary"] = text_content
+            #             break # Stop once we know it's unserviceable
+            #     except Exception:
+            #         pass
+            
+            print(f"--- Successfully captured: '{results['primary']}' ---")
             return results
+            # --- END: MODIFIED DATA EXTRACTION ---
 
         except Exception as e:
             # MODIFIED: Handle failure and decide whether to retry or fail permanently.
@@ -352,103 +380,153 @@ async def scrape_pincode_on_page_nykaa(page, site, pincode):
     # This is reached if all attempts in the loop fail
     return {"primary": "Error: All retry attempts failed.", "secondary": ""}
 
-async def search_and_scrape_nykaa(page, site, search_term, pincode_group):   
+async def scrape_pincode_on_nykaafashion(page, site, pincode):
     """
-    Searches for a product on Nykaa, clicks the first result, 
-    and then scrapes delivery speeds for a group of pincodes.
+    Attempts to enter a pincode and scrape delivery info on NykaaFashion pages.
+    This logic is a direct duplicate of the successful working code provided.
     """
-    print(f"--- Searching for '{search_term}' on Nykaa... ---")
+    config = SITE_CONFIG.get(site)
+    if not config:
+        return {"primary": "Site not configured", "secondary": ""}
 
-    # 1. Navigate to the homepage
-   # await page.goto("https://www.nykaa.com/", wait_until="domcontentloaded")
-    await page.goto("https://www.nykaa.com/skin/masks/c/8399/", wait_until="domcontentloaded", timeout=60000)
-    #await page.goto("https://www.nykaa.com/skin/masks/c/8399/", wait_until="networkidle", timeout=60000)
+    # Use the 3-attempt retry logic
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            # On retries (attempt > 0), the page is already reloaded by the except block.
+            if attempt > 0:
+                print(f"--- Starting Retry Attempt {attempt + 1}/{max_attempts} for pincode {pincode} ---")
 
-    # 2. Find and click the search bar to ensure it's focused
-    search_bar = page.locator('input[placeholder="Search on Nykaa"]')
-    await search_bar.click()
+            pre_click_selector = config.get("pre_pincode_click_selector")
+            if pre_click_selector:
+                try:
+                    # Use a short timeout as this button may not be present on the first run.
+                    await page.locator(pre_click_selector).first.click(timeout=1000)
+                except Exception:
+                    pass
+            
+            # --- STEP 2: Enter the pincode by simulating user typing ---
+            pincode_input_element = page.locator(config["pincode_input_selector"]).first
+            
+            # Explicitly wait for the input box to be visible before interacting.
+            await pincode_input_element.wait_for(state="visible", timeout=7000)
+            
+            await pincode_input_element.clear()
+            for char in pincode:
+                await pincode_input_element.press(char, delay=random.randint(80, 250))
+            
+            await page.wait_for_timeout(500)
 
-    # ADD a deliberate pause AFTER clicking but BEFORE typing.
-    # This gives the website's JavaScript time to prepare for input.
-    print("--- Pausing after click to let the search bar initialize... ---")
-    await page.wait_for_timeout(1000)  # Pause for 1 second
+            # --- STEP 3: Click the submit/check button ---
+            if config.get("pincode_submit_selector"):
+                await page.locator(config["pincode_submit_selector"]).first.click()
+                
+            # For Amazon, explicitly wait for the page to reload after submitting
+            # (Note: This check for 'Amazon' is safe to keep even though this function is for NykaaFashion)
+            if site == "Amazon": 
+                await page.wait_for_load_state('domcontentloaded', timeout=10000)
+                
+            # --- STEP 4: Data Extraction ---
+            selectors = config["delivery_info_selector"]
+            results = {}
+            if isinstance(selectors, dict):
+                for key, selector in selectors.items():
+                    try:
+                        element = page.locator(selector).first
+                        await expect(element).not_to_contain_text("Loading", timeout=3000)
+                        # Note: Replacing the double backslash '\\n' with single '\n' for safety, 
+                        # though the original code used '\\n'
+                        results[key] = (await element.inner_text()).strip().replace('\n', ' ')
+                    except Exception:
+                        results[key] = "Not found"
+            else:
+                try:
+                    element = page.locator(selectors).first
+                    await expect(element).not_to_contain_text("Loading", timeout=3000)
+                    results["primary"] = (await element.inner_text()).strip().replace('\n', ' ')
+                    results["secondary"] = "Not found" 
+                except Exception:
+                    results["primary"] = "Not found"
+                    results["secondary"] = "Not found"
+            
+            # If we reach here, the attempt was successful.
+            return results
+
+        except Exception as e:
+            # Handle failure and decide whether to retry or fail permanently.
+            print(f"--- Attempt {attempt + 1} for pincode {pincode} failed: {type(e).__name__} ---")
+            if attempt < max_attempts - 1: # If this wasn't the last attempt
+                print(f"--- Refreshing page and preparing for retry... ---")
+                await page.reload(wait_until="domcontentloaded", timeout=60000)
+            else: # This was the final attempt
+                print(f"--- Final attempt for pincode {pincode} also failed.")
+                return {"primary": f"Error: Failed after {max_attempts} attempts", "secondary": ""}
     
+    # This is reached if all attempts in the loop fail
+    return {"primary": "Error: All retry attempts failed.", "secondary": ""}
+
+async def scrape_product_page_nykaa_generic(page, site, search_term, pincode_group):
+    """
+    Handles scraping the product page and checking pincodes after landing on 
+    either Nykaa or NykaaFashion product page.
+    This replaces the bottom half of your original function.
+    """
     
-    # 3. Use press_sequentially to simulate a user typing
-    print(f"--- Typing '{search_term}' into search bar... ---")
-    await search_bar.press_sequentially(search_term, delay=random.randint(200, 400))
-
-    # 4. Press Enter to submit the search
-    await search_bar.press("Enter")
-
-    # --- START OF FIX ---
-    # ADD a robust wait here. 'networkidle' waits for the page to finish loading dynamic content.
-    print("--- Search submitted. Waiting for results page to fully load... ---")
     await page.wait_for_load_state("domcontentloaded", timeout=30000)
-    # --- END OF FIX ---
-
-    # 3. Wait for search results
-    print("--- Waiting for search results... ---")
-    first_result = page.locator(".css-xrzmfa").first
-    await first_result.wait_for(state="visible", timeout=15000)
-
-    # --- START OF MODIFICATION ---
-    # Prepare to capture the new page that opens after the click
-    print("--- Expecting a new page to open... ---")
-    async with page.context.expect_page() as new_page_info:
-        await first_result.click()  # This action triggers the new page
-
-    # Get the new page object from the event
-    new_page = await new_page_info.value
-    print(f"--- Switched focus to new page: {new_page.url} ---")
-
-    # All subsequent actions must use this 'new_page' object
-    await new_page.wait_for_load_state("domcontentloaded", timeout=20000)
-    # --- END OF MODIFICATION ---
-
-    print(f"--- Landed on product page for '{search_term}'. Starting pincode checks. ---")
-
-    # After the page has loaded, check for and close any pop-ups.
-    await check_and_close_intermittent_popup(new_page)
-    # 5. Loop through the pincodes for this product and scrape the data
+    
+    print(f"--- Landed on product page for '{search_term}' ({site}). Starting pincode checks. ---")
+    # Check for and close any pop-ups (using the new 'page' object)
+   # await check_and_close_intermittent_popup(page) 
+    
     group_results = []
+    
+    # 1. Define selectors based on the detected site
+    # You MUST maintain a global or passed configuration for these selectors
+    if site == "Nykaa":
+        unavailable_selector = SITE_CONFIG.get("Nykaa", {}).get("unavailable_selector")
+        # Ensure scrape_pincode_on_page_nykaa is available
+        pincode_scraper_func = scrape_pincode_on_page_nykaa
+    elif site == "Nykaafashion":
+        unavailable_selector = SITE_CONFIG.get("Nykaafashion", {}).get("unavailable_selector")
+        # Ensure scrape_pincode_on_page_nykaafashion is available
+        pincode_scraper_func = scrape_pincode_on_nykaafashion
+    else:
+        print(f"Error: Unknown site configuration for {site}")
+        return []
 
-    # Check if the product is unavailable before checking pincodes.
-    config = SITE_CONFIG.get(site, {})
-    unavailable_selector = config.get("unavailable_selector")
+
+    # 2. Check if the product is unavailable
     if unavailable_selector:
         try:
-            # Use a short timeout to quickly check for the "Notify Me" button.
-            await new_page.locator(unavailable_selector).first.wait_for(state="visible", timeout=1000)
-            print(f"--- Product is unavailable. Skipping all pincodes for this URL. ---")
-            # Mark all pincodes for this URL as unavailable and return immediately.
+            await page.locator(unavailable_selector).first.wait_for(state="visible", timeout=3000)
+            print(f"--- Product is unavailable on {site}. Skipping all pincodes. ---")
             for _, row in pincode_group.iterrows():
                 group_results.append({
                     "style_name": row["style_name"], "site_name": site,
-                    "product_url": new_page.url, "pincode": row["pincode"],
+                    "product_url": page.url, "pincode": row["pincode"],
                     "delivery_info": "Product Unavailable", "secondary_delivery_info": ""
                 })
-            return group_results # Skip to the next product
+            return group_results
         except Exception:
-            # If the selector is not found, the product is available. Proceed normally.
-            pass
+            pass # Product is available, proceed normally
 
+    # 3. Loop through pincodes
+    #print(f"---  Loop through pincodes ---")
     consecutive_pincode_failures = 0
-    #site = "Nykaa"
-
     for _, row in pincode_group.iterrows():
         if consecutive_pincode_failures >= 5:
             print(f"--- Aborting remaining pincodes for {search_term} due to failures. ---")
             break
 
         pincode = str(row["pincode"])
-        # MODIFIED: Pass the 'new_page' object to your scraping function
-        delivery_data = await scrape_pincode_on_page_nykaa(new_page, site, pincode)
+        
+        # Call the correct scraping function dynamically
+        print(f"--- Calling nykaafashion pincode function {pincode_scraper_func}---")
+        delivery_data = await pincode_scraper_func(page, site, pincode)
 
         result = {
-        #    "master_category": row["master_category"], "article_type": row["article_type"],
             "style_name": row["style_name"], "site_name": site,
-            "product_url": new_page.url, "pincode": pincode,
+            "product_url": page.url, "pincode": pincode,
             "delivery_info": delivery_data.get("primary", ""),
             "secondary_delivery_info": delivery_data.get("secondary", "")
         }
@@ -460,6 +538,109 @@ async def search_and_scrape_nykaa(page, site, search_term, pincode_group):
             consecutive_pincode_failures = 0
 
     return group_results
+
+async def search_and_scrape_nykaa(page, site, search_term, pincode_group):   
+    """
+    Searches for a product on Nykaa, and then delegates scraping 
+    to the correct function (Nykaa or NykaaFashion) based on the final URL.
+    """
+    print(f"--- Starting search task for '{search_term}' on {site}... ---")
+    
+    # 1. Navigate to the search-friendly page (using the original URL for stability)
+    await page.goto("https://www.nykaa.com/", wait_until="domcontentloaded", timeout=60000)
+
+    # 2. Find and click the search bar
+    search_bar = page.locator('input[placeholder="Search on Nykaa"]')
+    await search_bar.click()
+    print("--- Pausing after click to let the search bar initialize... ---")
+    await page.wait_for_timeout(1000)  # Pause for 1 second
+    
+    # 3. Type and submit the search term
+    print(f"--- Typing '{search_term}' into search bar... ---")
+    await search_bar.press_sequentially(search_term, delay=random.randint(200, 400))
+    
+    # Capture the response/navigation *after* pressing Enter
+    async with page.expect_navigation(wait_until="domcontentloaded", timeout=60000):
+        await search_bar.press("Enter")
+
+    print("--- Search submitted. Checking final URL to determine site... ---")
+    
+    # Check the resulting URL to see which domain we landed on
+    final_url = page.url
+    
+    if "nykaafashion.com" in final_url:
+        target_site = "Nykaafashion"
+        print(f"--- Redirected to NykaaFashion.com. Switching to '{target_site}' logic. ---")
+    
+        # 4. Wait for and click the first search result on NykaaFashion.com
+        try:
+            # After the page has loaded, check for and close any pop-ups.
+            await check_and_close_intermittent_popup(page)
+            # Use the selector you provided for NykaaFashion results
+            #await page.reload(wait_until="domcontentloaded", timeout=10000)
+            try:
+                viewport_size = page.viewport_size
+                if viewport_size is None:
+                    # Fallback size if not explicitly set (e.g., in headless mode)
+                    center_x, center_y = 300, 350 
+                else:
+                    center_x = viewport_size['width'] / 2
+                    center_y = viewport_size['height'] / 2
+
+                print(f"--- Stabilizing: Performing mouse click at product area ({center_x:.0f}, {center_y:.0f}). ---")
+                async with page.context.expect_page(timeout=20000) as new_page_info:
+                    await page.mouse.click(center_x, center_y) 
+
+                # 4. Reass  ign 'page' to the newly opened product page object
+                page = await new_page_info.value
+                print(f"--- Successfully navigated via mouse click to: {page.url} ---")
+            except Exception as e:
+                print(f"Warning: Center-page click failed. Continuing with error: {e}")
+            # first_result = page.locator('.css-1ll3inr[data-at="product-subtitle"]').first
+            # print(f"--- Trying to find product link ---")
+            # await first_result.wait_for(state="visible", timeout=10000)
+            
+            # # Prepare to capture the new page that opens after the click
+            # async with page.context.expect_page() as new_page_info:
+            #     await first_result.click()  # This action triggers the new page
+            # print(f"--- Clicked to a new page")
+            # # Reassign 'page' to the new product page object
+            # page = await new_page_info.value
+            
+        except Exception as e:
+            print(f"!!! CRITICAL FAILURE: Could not find first result selector on Nykaa Fashion. Error: {e}")
+            return [] # Return empty if search results fail
+        
+        
+    elif "nykaa.com" in final_url:
+        target_site = "Nykaa"
+        print(f"--- Landed on Nykaa.com search results. Proceeding with '{target_site}' logic. ---")
+        
+        # --- NYKAA-SPECIFIC NAVIGATION ---
+        # 4. Wait for and click the first search result on Nykaa.com
+        try:
+            first_result = page.locator(".css-xrzmfa").first
+            await first_result.wait_for(state="visible", timeout=5000)
+        except Exception as e:
+            print(f"!!! CRITICAL FAILURE: Could not find first result selector on Nykaa. Error: {e}")
+            return [] # Return empty if search results fail
+            
+        print("--- Clicking first product result... ---")
+        
+        # Prepare to capture the new product page that opens after the click
+        async with page.context.expect_page() as new_page_info:
+            await first_result.click()  # This action triggers the new page
+
+        # Get the new product page object from the event
+        page = await new_page_info.value
+        # --- END NYKAA-SPECIFIC NAVIGATION ---
+
+    else:
+        print(f"!!! CRITICAL FAILURE: Unknown domain after search: {final_url}. Aborting. !!!")
+        return []
+
+    # Delegate the scraping logic to a unified function
+    return await scrape_product_page_nykaa_generic(page, target_site, search_term, pincode_group)
 #Amazon Specific Functions
 async def scrape_pincode_on_page_amz(page, site, pincode):
     """
@@ -540,44 +721,86 @@ async def scrape_pincode_on_page_amz(page, site, pincode):
                     # We can safely continue to check for delivery dates.
                     pass
             # --- END OF MODIFICATION ---
-            
-      # --- Data Extraction ---
-            # Initialize a dictionary to hold the results.
-            results = {"primary": "Not found", "secondary": ""}
-            
-            # Get the prioritized list of selectors from your config.
-            delivery_selectors = config.get("delivery_info_selectors", [])
-            
-            # Loop through each selector in the order they are listed.
-            for item in delivery_selectors:
-                item_type = item["type"]
-                selector = item["selector"]
-                
-                try:
-                    # Use a short timeout to quickly check if the element is visible.
-                    element = page.locator(selector).first
-                    await element.wait_for(state="visible", timeout=500) #changed the timeout here to make the script faster
-                    
-                    # If the element is found, grab its text.
-                    text_content = (await element.inner_text()).strip()
-                    
-                    if item_type == "primary_delivery":
-                        results["primary"] = text_content
-                        
-                    elif item_type == "unserviceable":
-                        results["primary"] = text_content
-                        # This is a final status. We can stop checking.
-                        break
-                        
-                    elif item_type == "secondary_info":
-                        results["secondary"] = text_content
-                
-                except Exception:
-                    # It's normal for a selector not to be found. Just move to the next one.
-                    pass
+            # --- START: CORRECTED DATA EXTRACTION FOR AMAZON ---
+                results = {"primary": "Not found", "secondary": ""}
 
-            # If we reach here, the attempt was successful.
-            return results
+                try:
+                    # 1. Get all possible delivery selector strings from your config.
+                    delivery_selectors_config = config.get("delivery_info_selectors", [])
+                    xpath_list = [item["selector"] for item in delivery_selectors_config]
+                    
+                    # 2. Correctly combine them into a single XPath string with the "|" (OR) operator.
+                    combined_selector = " | ".join(xpath_list)
+                    
+                    print(f"--- Waiting for one of these elements to appear: {combined_selector} ---")
+
+                    # 3. Wait for the FIRST element that matches ANY of the selectors to become visible.
+                    result_locator = page.locator(combined_selector).first
+                    await result_locator.wait_for(state="visible", timeout=10000)
+                    
+                    # 4. Now that we've found the main delivery status, extract all info.
+                    # We loop through the config to correctly assign the text we found and to find any secondary info.
+                    for item in delivery_selectors_config:
+                        try:
+                            element = page.locator(item["selector"]).first
+                            # Use a very short timeout since the elements should already be visible.
+                            if await element.is_visible(timeout=500):
+                                text_content = (await element.inner_text()).strip()
+                                
+                                if item["type"] == "primary_delivery" or item["type"] == "unserviceable":
+                                    results["primary"] = text_content
+                                elif item["type"] == "secondary_info":
+                                    results["secondary"] = text_content
+
+                        except Exception:
+                            pass # Ignore if an optional element (like secondary_info) is not found.
+
+                    print(f"--- Successfully captured: Primary='{results['primary']}', Secondary='{results['secondary']}' ---")
+
+                except Exception as e:
+                    # This will catch the timeout if none of the primary/unserviceable elements appear.
+                    print(f"--- Timed out waiting for delivery info. Error: {e} ---")
+                    results["primary"] = "Failed to get delivery info"
+
+                return results
+                # --- END: CORRECTED DATA EXTRACTION FOR AMAZON ---     
+    #   # --- Data Extraction ---
+    #         # Initialize a dictionary to hold the results.
+    #         results = {"primary": "Not found", "secondary": ""}
+            
+    #         # Get the prioritized list of selectors from your config.
+    #         delivery_selectors = config.get("delivery_info_selectors", [])
+            
+    #         # Loop through each selector in the order they are listed.
+    #         for item in delivery_selectors:
+    #             item_type = item["type"]
+    #             selector = item["selector"]
+                
+    #             try:
+    #                 # Use a short timeout to quickly check if the element is visible.
+    #                 element = page.locator(selector).first
+    #                 await element.wait_for(state="visible", timeout=500) #changed the timeout here to make the script faster
+                    
+    #                 # If the element is found, grab its text.
+    #                 text_content = (await element.inner_text()).strip()
+                    
+    #                 if item_type == "primary_delivery":
+    #                     results["primary"] = text_content
+                        
+    #                 elif item_type == "unserviceable":
+    #                     results["primary"] = text_content
+    #                     # This is a final status. We can stop checking.
+    #                     break
+                        
+    #                 elif item_type == "secondary_info":
+    #                     results["secondary"] = text_content
+                
+    #             except Exception:
+    #                 # It's normal for a selector not to be found. Just move to the next one.
+    #                 pass
+
+    #         # If we reach here, the attempt was successful.
+    #         return results
         
         except Exception as e:
             # MODIFIED: Handle failure and decide whether to retry or fail permanently.
@@ -802,40 +1025,85 @@ async def scrape_pincode_on_page_myntra(page, site, pincode):
             #await page.wait_for_timeout(1000)
 
             # --- Data Extraction ---
-
-            # --- START: MODIFIED DATA EXTRACTION ---
-            # 1. Create a combined selector for both possible outcomes.
-            unserviceable_selector = config["delivery_info_selectors"][0]["selector"]
-            success_selector = config["delivery_info_selectors"][1]["selector"]
-            combined_selector = f"{unserviceable_selector}, {success_selector}"
-
-            # 2. Wait for EITHER the unserviceable message OR the success message to be visible.
-            print("--- Waiting for delivery info to appear... ---")
-            result_element = page.locator(combined_selector).first
-            await result_element.wait_for(state="visible", timeout=10000)
-
-            # 3. Now that a result is visible, run the original loop to capture the correct text.
-            #    This loop is already designed to check for both types.
-            print("--- Result is visible. Capturing text... ---")
+            # --- START: CORRECTED AND ROBUST SOLUTION FOR MYNTRA ---
             results = {"primary": "Not found", "secondary": ""}
-            for item in config.get("delivery_info_selectors", []):
-                try:
-                    element = page.locator(item["selector"]).first
-                    # Use a very short timeout here since we know one of the elements is already visible.
-                    text_content = (await element.inner_text(timeout=1000)).strip()
-                    
-                    if item["type"] == "primary_delivery":
-                        results["primary"] = text_content
-                        break # Stop once we have a valid delivery date
-                    elif item["type"] == "unserviceable":
-                        results["primary"] = text_content
-                        break # Stop once we know it's unserviceable
-                except Exception:
-                    pass
-            
-            print(f"--- Successfully captured: '{results['primary']}' ---")
+
+            try:
+                # 1. Get and combine the selectors as before.
+                delivery_selectors_config = config.get("delivery_info_selectors", [])
+                css_list = [item["selector"] for item in delivery_selectors_config]
+                combined_selector = ", ".join(css_list)
+                
+                print(f"--- Waiting for one of these elements to appear: {combined_selector} ---")
+
+                # 2. Wait for the result container element to become visible.
+                result_locator = page.locator(combined_selector).first
+                await result_locator.wait_for(state="visible", timeout=10000)
+                
+                # 3. NEW: Actively poll the element's text until it updates from "Loading..."
+                final_text = ""
+                # Set a timeout for how long we're willing to wait for the text to change.
+                polling_timeout = 10  # 10 seconds
+                start_time = time.time()
+
+                while time.time() - start_time < polling_timeout:
+                    text_content = (await result_locator.inner_text()).strip()
+                    # Check if the text is no longer "Loading..." and is not empty.
+                    if "Loading..." not in text_content and text_content:
+                        final_text = text_content
+                        break  # Exit the loop once we have the final text
+                    # Wait for a short interval before checking again.
+                    await page.wait_for_timeout(500) # 500 milliseconds
+
+                # 4. If the loop finished without finding the final text, raise an error.
+                if not final_text:
+                    raise Exception("Timed out waiting for 'Loading...' message to update.")
+                
+                # 5. Assign the final, correct text to the results.
+                results["primary"] = final_text
+                print(f"--- Successfully captured: '{results['primary']}' ---")
+
+            except Exception as e:
+                print(f"--- Timed out waiting for delivery info. Error: {e} ---")
+                results["primary"] = "Failed to get delivery info"
+
             return results
-            # --- END: MODIFIED DATA EXTRACTION ---
+            # --- END: CORRECTED AND ROBUST SOLUTION FOR MYNTRA ---
+        
+
+            # # --- START: MODIFIED DATA EXTRACTION ---
+            # # 1. Create a combined selector for both possible outcomes.
+            # unserviceable_selector = config["delivery_info_selectors"][0]["selector"]
+            # success_selector = config["delivery_info_selectors"][1]["selector"]
+            # combined_selector = f"{unserviceable_selector}, {success_selector}"
+
+            # # 2. Wait for EITHER the unserviceable message OR the success message to be visible.
+            # print("--- Waiting for delivery info to appear... ---")
+            # result_element = page.locator(combined_selector).first
+            # await result_element.wait_for(state="visible", timeout=10000)
+
+            # # 3. Now that a result is visible, run the original loop to capture the correct text.
+            # #    This loop is already designed to check for both types.
+            # print("--- Result is visible. Capturing text... ---")
+            # results = {"primary": "Not found", "secondary": ""}
+            # for item in config.get("delivery_info_selectors", []):
+            #     try:
+            #         element = page.locator(item["selector"]).first
+            #         # Use a very short timeout here since we know one of the elements is already visible.
+            #         text_content = (await element.inner_text(timeout=1000)).strip()
+                    
+            #         if item["type"] == "primary_delivery":
+            #             results["primary"] = text_content
+            #             break # Stop once we have a valid delivery date
+            #         elif item["type"] == "unserviceable":
+            #             results["primary"] = text_content
+            #             break # Stop once we know it's unserviceable
+            #     except Exception:
+            #         pass
+            
+            # print(f"--- Successfully captured: '{results['primary']}' ---")
+            # return results
+            # # --- END: MODIFIED DATA EXTRACTION ---
 
         except Exception as e:
             print(f"--- Attempt {attempt + 1} for pincode {pincode} failed: {type(e).__name__} ---")
@@ -921,7 +1189,7 @@ async def run_scrape_task(browser, site, search_term, group, pass_num):
     """
     context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
     page = await context.new_page()
-    
+
     try:
         print(f"\n[Pass {pass_num}] Starting task for product: '{search_term}' on site: '{site}'...")
         scraper_function = SCRAPER_WORKFLOWS.get(site)

@@ -241,11 +241,24 @@ if st.sidebar.button("🚀 Get Delivery Speeds"):
             st.subheader("📊 Average Delivery Speed by Site")
             if not valid_results.empty:
                 avg_delivery_days = valid_results.groupby('Site')['Days to Delivery'].mean().round(1)
+                # 2. Find the minimum average days
+                min_avg_days = avg_delivery_days.min()
+    
+    # 3. Create a set of sites that match the minimum average days (TIE-CHECK)
+                fastest_sites = set(avg_delivery_days[avg_delivery_days == min_avg_days].index)
+    
                 best_avg_site = avg_delivery_days.idxmin()
                 avg_cols = st.columns(len(avg_delivery_days))
                 for i, (site, avg_days) in enumerate(avg_delivery_days.items()):
-                    delta_text = "🏆 Fastest" if site == best_avg_site else None
-                    avg_cols[i].metric(label=f"Avg. Speed: {site}", value=f"{avg_days} Days", delta=delta_text, delta_color="inverse")
+                    # Check if the current site is in the set of tied fastest sites
+                    delta_text = "🏆 Fastest" if site in fastest_sites else None
+        
+                    avg_cols[i].metric(
+                    label=f"Avg. Speed: {site}", 
+                    value=f"{avg_days} Days", 
+                    delta=delta_text, 
+                    delta_color="inverse"
+                    )
             else:
                 st.info("No data to calculate average delivery speeds.")
 
@@ -272,7 +285,8 @@ if st.sidebar.button("🚀 Get Delivery Speeds"):
                 # Add other variants if they exist (e.g., 'AmazonIn': 'Amazon')
             }
 
-            # Apply the mapping to the 'Site' column in your DataFrame# This ensures that all 'Nykaafashion' entries are now labeled 'Nykaa'.
+            # Apply the mapping to the 'Site' column in your DataFrame
+# This ensures that all 'Nykaafashion' entries are now labeled 'Nykaa'.
             display_df['Site'] = display_df['Site'].replace(site_name_map)
             pivoted_df = display_df.pivot_table(index='Pincode', columns='Site', values='Days to Delivery').reindex(columns=selected_sites)
             st.dataframe(style_comparison_df(pivoted_df, selected_sites), width='stretch')

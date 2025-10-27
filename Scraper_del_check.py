@@ -3,7 +3,6 @@
 
 # In[ ]:
 
-
 #from playwright.async_api import async_playwright
 #from playwright_stealth import stealth_async
 #from playwright_stealth.stealth import stealth_sync, stealth_async
@@ -16,7 +15,8 @@ import io
 import re
 import time
 from datetime import date,datetime,timedelta
-from playwright.async_api import async_playwright, TimeoutError, expect
+#from playwright.async_api import async_playwright, TimeoutError, expect
+from patchright.async_api import async_playwright, TimeoutError, expect
 import traceback
 import os
 import random
@@ -169,7 +169,8 @@ SITE_CONFIG = {
     "pincode_submit_selector": "//button[text()='Apply']",
     # This selector is also more robust.
     "unavailable_selector": "//button[normalize-space()='Notify Me']",    
-    "delivery_info_selector": "//h3[contains(text(), 'Delivery by')]"
+   # "delivery_info_selector": "//h3[contains(text(), 'Delivery by')]"
+    "delivery_info_selector": "//h3[contains(text(), 'Delivery by')] | //div[contains(text(), 'Pincode not serviceable')]"
 },
 
     "Ajio": {
@@ -363,7 +364,7 @@ async def scrape_pincode_on_page_nykaa(page, site, pincode):
             #     except Exception:
             #         pass
             
-            print(f"--- Successfully captured: '{results['primary']}' ---")
+           # print(f"--- Successfully captured: '{results['primary']}' ---")
             return results
             # --- END: MODIFIED DATA EXTRACTION ---
 
@@ -390,7 +391,7 @@ async def scrape_pincode_on_nykaafashion(page, site, pincode):
         return {"primary": "Site not configured", "secondary": ""}
 
     # Use the 3-attempt retry logic
-    max_attempts = 3
+    max_attempts = 2
     for attempt in range(max_attempts):
         try:
             # On retries (attempt > 0), the page is already reloaded by the except block.
@@ -720,50 +721,55 @@ async def scrape_pincode_on_page_amz(page, site, pincode):
                     # This is the expected outcome if the product *is* available.
                     # We can safely continue to check for delivery dates.
                     pass
-            # --- END OF MODIFICATION ---
+            
             # --- START: CORRECTED DATA EXTRACTION FOR AMAZON ---
                 results = {"primary": "Not found", "secondary": ""}
 
                 try:
-                    # 1. Get all possible delivery selector strings from your config.
+                    # 1. Get all selectors from the config.
                     delivery_selectors_config = config.get("delivery_info_selectors", [])
-                    xpath_list = [item["selector"] for item in delivery_selectors_config]
                     
-                    # 2. Correctly combine them into a single XPath string with the "|" (OR) operator.
-                    combined_selector = " | ".join(xpath_list)
-                    
-                    print(f"--- Waiting for one of these elements to appear: {combined_selector} ---")
+                    # 2. Create a list of *only* the required selectors (primary and unserviceable).
+                    required_selectors_list = []
+                    for item in delivery_selectors_config:
+                        if item["type"] == "primary_delivery" or item["type"] == "unserviceable":
+                            required_selectors_list.append(item["selector"])
 
-                    # 3. Wait for the FIRST element that matches ANY of the selectors to become visible.
-                    result_locator = page.locator(combined_selector).first
+                    # 3. Combine *only* the required selectors for the main wait.
+                    combined_required_selector = " | ".join(required_selectors_list)
+                    
+                    print(f"--- Waiting for a primary result to appear: {combined_required_selector} ---")
+
+                    # 4. Wait for the FIRST *required* element to become visible.
+                    result_locator = page.locator(combined_required_selector).first
                     await result_locator.wait_for(state="visible", timeout=10000)
                     
-                    # 4. Now that we've found the main delivery status, extract all info.
-                    # We loop through the config to correctly assign the text we found and to find any secondary info.
+                    # 5. Now that the main status is visible, get its text.
+                    text_content = (await result_locator.inner_text()).strip()
+                    results["primary"] = text_content
+                    print(f"--- Successfully captured Primary: '{results['primary']}' ---")
+
+                    # 6. NOW, separately check for optional secondary info with a short timeout.
+                    #    This check is non-blocking and will not fail the whole step.
                     for item in delivery_selectors_config:
-                        try:
-                            element = page.locator(item["selector"]).first
-                            # Use a very short timeout since the elements should already be visible.
-                            if await element.is_visible(timeout=500):
-                                text_content = (await element.inner_text()).strip()
-                                
-                                if item["type"] == "primary_delivery" or item["type"] == "unserviceable":
-                                    results["primary"] = text_content
-                                elif item["type"] == "secondary_info":
+                        if item["type"] == "secondary_info":
+                            try:
+                                element = page.locator(item["selector"]).first
+                                # Use a reasonable, non-blocking timeout (e.g., 2 seconds)
+                                if await element.is_visible(timeout=500):
+                                    text_content = (await element.inner_text()).strip()
                                     results["secondary"] = text_content
-
-                        except Exception:
-                            pass # Ignore if an optional element (like secondary_info) is not found.
-
-                    print(f"--- Successfully captured: Primary='{results['primary']}', Secondary='{results['secondary']}' ---")
+                                    print(f"--- Successfully captured Secondary: '{results['secondary']}' ---")
+                            except Exception:
+                                pass # It's perfectly fine if secondary info is not found.
 
                 except Exception as e:
-                    # This will catch the timeout if none of the primary/unserviceable elements appear.
-                    print(f"--- Timed out waiting for delivery info. Error: {e} ---")
+                    # This will catch the timeout if no *primary or unserviceable* info appears.
+                    print(f"--- Timed out waiting for primary delivery info. Error: {e} ---")
                     results["primary"] = "Failed to get delivery info"
 
                 return results
-                # --- END: CORRECTED DATA EXTRACTION FOR AMAZON ---     
+                # --- END: CORRECTED DATA EXTRACTION FOR AMAZON --- 
     #   # --- Data Extraction ---
     #         # Initialize a dictionary to hold the results.
     #         results = {"primary": "Not found", "secondary": ""}
@@ -912,7 +918,7 @@ async def search_and_scrape_amz(page, site, search_term, pincode_group):
     print(f"--- Switched focus to new page: {new_page.url} ---")
     
     # Wait for the product page to load
-    await new_page.wait_for_load_state("domcontentloaded", timeout=20000)
+    await new_page.wait_for_load_state("domcontentloaded", timeout=60000)
     
     print(f"--- Landed on product page for '{search_term}'. Starting pincode checks. ---")
 
@@ -1123,6 +1129,7 @@ async def search_and_scrape_myntra(page, site, search_term, pincode_group):
 
     # 1. Navigate and search
     await page.goto("https://www.myntra.com/shirts/powerlook/powerlook-geometric-printed-short-sleeves-shirt/35802894/buy", wait_until="domcontentloaded", timeout=60000)
+    #await page.goto("https://www.meesho.com/mens-bootcut-indigo-stretchable-jeans-pant/p/a7txyi", wait_until="domcontentloaded", timeout=60000)
     search_bar = page.locator('input[placeholder="Search for products, brands and more"]')
     await search_bar.click()
     await page.wait_for_timeout(1000)
@@ -1187,7 +1194,8 @@ async def run_scrape_task(browser, site, search_term, group, pass_num):
     runs the designated scraper workflow, and handles errors for one task without
     stopping others.
     """
-    context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
+    #context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
+    context = await browser.new_context(no_viewport=True)
     page = await context.new_page()
 
     try:
@@ -1245,17 +1253,19 @@ async def main_scraper_func(input_df: pd.DataFrame) -> pd.DataFrame:
                 break
             print("\n" + "="*20 + f" STARTING PASS 2: RETRYING {len(tasks_df.groupby(['site_name', 'style_name']))} FAILED TASKS IN PARALLEL " + "="*20)
 
-        async with async_playwright() as p:
-           # browser = await p.chromium.launch(headless=False) 
+        async with async_playwright() as p:     
            #launch wihout being visible
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    "--window-position=2000,2000",
-                    "--window-size=100,100"
-                ]
-            )
-            
+            browser = await p.chromium.launch(headless=False,
+                                              channel='chrome',
+                                         #     args=["--start-maximized"]
+                                              ) 
+            # browser = await p.chromium.launch(headless=False,
+            #     args=[
+            #         "--window-position=2000,2000",
+            #         "--window-size=100,100"
+            #     ]
+            # )
+           
             # 1. Prepare all tasks without running them yet
             tasks_to_run = []
             for (site, search_term), group in tasks_df.groupby(['site_name', 'style_name']):

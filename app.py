@@ -77,11 +77,7 @@ CITY_PINCODES = {
     "Vishakhapatnam": ["530016", "530017", "530045"],
     "Vizianagaram": ["535002", "535001", "535128"]
 }
-# CITY_PINCODES = {
-#     "Bangalore": ["560001", "560095", "560068"],
-#     "Delhi": ["110001", "110006", "110017"],
-#     "Mumbai": ["400001", "400013", "400050"]
-# }
+
 
 # --- STYLING FUNCTION (No changes needed) ---
 def style_comparison_df(df, sites_to_style):
@@ -89,6 +85,15 @@ def style_comparison_df(df, sites_to_style):
     if not valid_sites_to_style:
         return df.style
     return df.style.highlight_min(subset=valid_sites_to_style, color='#C8E6C9', axis=1).highlight_null(color='#FFCDD2', subset=valid_sites_to_style).format("{:.0f}", na_rep="Unavailable", subset=valid_sites_to_style)
+
+# --- NEW STYLING FUNCTION FOR CITY HEATMAP ---
+def style_city_heatmap_df(df, sites_to_style):
+    valid_sites_to_style = [site for site in sites_to_style if site in df.columns]
+    if not valid_sites_to_style:
+        return df.style
+    # highlight_min highlights the fastest delivery (minimum days) in green
+    return df.style.highlight_min(subset=valid_sites_to_style, color='#C8E6C9', axis=1).highlight_null(color='#FFCDD2', subset=valid_sites_to_style).format("{:.1f}", na_rep="Unavailable", subset=valid_sites_to_style)
+
 
 # --- THREADING FUNCTION ---
 def run_scraper_in_thread(input_df, result_queue):
@@ -118,22 +123,6 @@ st.markdown(
 st.sidebar.header("📊 Control Panel")
 #search term logic
 search_term = st.sidebar.text_input("Enter a Product to Search:", "M.A.C Lipstick")
-# # --- NEW: HIERARCHICAL PRODUCT SELECTION ---
-# st.sidebar.subheader("1. Select a Product")
-# # Dropdown for Master Category
-# master_cat_list = category_df['master_category'].unique()
-# selected_master_cat = st.sidebar.selectbox("Master Category:", master_cat_list)
-
-# # Dropdown for Business Unit (filtered by Master Category)
-# bu_list = category_df[category_df['master_category'] == selected_master_cat]['business_unit'].unique()
-# selected_bu = st.sidebar.selectbox("Business Unit:", bu_list)
-
-# # Dropdown for Product Type (filtered by Business Unit)
-# product_type_list = category_df[category_df['business_unit'] == selected_bu]['Product type'].unique()
-# selected_product_type = st.sidebar.selectbox("Product Type:", product_type_list)
-# # The selected_product_type will be our new search term
-# search_term = selected_product_type
-# # --- END OF NEW PRODUCT SELECTION ---
 
 # --- Site selection remains the same ---
 st.sidebar.subheader("2. Select Competitor Sites")
@@ -154,10 +143,12 @@ if location_choice == "Enter Pincodes Manually":
     pincodes_input = st.sidebar.text_area(
         "Enter Pincodes to Check (one per line):", "201301\n700020"
     )
+    selected_cities = None # Ensure this is cleared if manual pincode is used
 else:
     selected_cities = st.sidebar.multiselect(
         "Select Cities:", options=list(CITY_PINCODES.keys()), default=["Bangalore", "Delhi"]
     )
+    pincodes_input = None # Ensure this is cleared if city is used
 # --- END OF NEW LOCATION SELECTION ---
 
 
@@ -184,7 +175,7 @@ if st.sidebar.button("🚀 Get Delivery Speeds"):
         st.header(f"🔍 Results for: *{search_term}*")
 
         # --- TIME-BASED PROGRESS BAR IMPLEMENTATION (No changes needed here) ---
-        TIME_ESTIMATES_PER_PINCODE = {"Amazon": 9, "Nykaa": 7, "Myntra": 5, "Default": 10}
+        TIME_ESTIMATES_PER_PINCODE = {"Amazon": 8, "Nykaa": 5, "Myntra": 5, "Default": 10}
         
         if selected_sites:
             max_time_per_pincode = max(
@@ -230,24 +221,33 @@ if st.sidebar.button("🚀 Get Delivery Speeds"):
         status_text.success(f"Scraping complete in {int(minutes)}m {int(seconds)}s!")
         # --- END OF PROGRESS BAR IMPLEMENTATION ---
 
-        # --- DATA PROCESSING AND DISPLAY (No changes needed here) ---
+        # --- DATA PROCESSING AND DISPLAY ---
         display_df = results_df.rename(columns={'site_name': 'Site', 'pincode': 'Pincode', 'days_to_delivery': 'Days to Delivery'})
+        # Create a dictionary to map any internal variants back to the main display name.
+        site_name_map = {
+            'Nykaafashion': 'Nykaa',  # Maps the scraped name to the display name
+            'Nykaa': 'Nykaa',        # Keeps the original Nykaa entries as 'Nykaa'
+            # Add other variants if they exist (e.g., 'AmazonIn': 'Amazon')
+        }
+        display_df['Site'] = display_df['Site'].replace(site_name_map)
         valid_results = display_df.dropna(subset=['Days to Delivery'])
 
         if results_df.empty:
             st.error("Scraper returned no data. Please check the scraper logs.")
         else:
+            
             st.markdown("---")
-            st.subheader("📊 Average Delivery Speed by Site")
+            st.subheader("📊 Average Delivery Speed by Site Metrics")
             if not valid_results.empty:
+                # 1. Calculate average delivery days
                 avg_delivery_days = valid_results.groupby('Site')['Days to Delivery'].mean().round(1)
+                
                 # 2. Find the minimum average days
                 min_avg_days = avg_delivery_days.min()
     
-    # 3. Create a set of sites that match the minimum average days (TIE-CHECK)
+                # 3. Create a set of sites that match the minimum average days (TIE-CHECK)
                 fastest_sites = set(avg_delivery_days[avg_delivery_days == min_avg_days].index)
     
-                best_avg_site = avg_delivery_days.idxmin()
                 avg_cols = st.columns(len(avg_delivery_days))
                 for i, (site, avg_days) in enumerate(avg_delivery_days.items()):
                     # Check if the current site is in the set of tied fastest sites
@@ -271,23 +271,42 @@ if st.sidebar.button("🚀 Get Delivery Speeds"):
                 unserviceable_counts.rename(columns={'Pincode': 'Non-Serviceable Pincode Count'}, inplace=True)
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    st.dataframe(unserviceable_counts)
+                    st.dataframe(unserviceable_counts, hide_index=True)
             else:
                 st.success("✅ All selected pincodes appear to be serviceable by all sites!")
             
             st.markdown("---")
 
-            st.subheader("🚚 Detailed Delivery Speed Comparison (in Days)")
-            # Create a dictionary to map any internal variants back to the main display name.
-            site_name_map = {
-                'Nykaafashion': 'Nykaa',  # Maps the scraped name to the display name
-                'Nykaa': 'Nykaa',        # Keeps the original Nykaa entries as 'Nykaa'
-                # Add other variants if they exist (e.g., 'AmazonIn': 'Amazon')
-            }
+            # --- City-Level Delivery Speed Heatmap (Conditional) ---
+            if location_choice == "Select by City" and selected_cities:
+                st.subheader("🔥 City-Level Delivery Speed Heatmap (Avg. Days)")
+                
+                # Create a reverse mapping: Pincode -> City
+                pincode_to_city = {}
+                for city, pincodes in CITY_PINCODES.items():
+                    for pincode in pincodes:
+                        # Only map pincodes that were actually selected
+                        if pincode in pincode_list: 
+                            pincode_to_city[pincode] = city
 
-            # Apply the mapping to the 'Site' column in your DataFrame
-# This ensures that all 'Nykaafashion' entries are now labeled 'Nykaa'.
-            display_df['Site'] = display_df['Site'].replace(site_name_map)
+                # Add City column to the display DataFrame
+                city_results_df = valid_results.copy()
+                city_results_df['City'] = city_results_df['Pincode'].map(pincode_to_city)
+                
+                # Filter out any rows where Pincode wasn't in a selected city (safety check)
+                city_results_df.dropna(subset=['City'], inplace=True) 
+
+                # Calculate average days per City and Site
+                city_avg_df = city_results_df.groupby(['City', 'Site'])['Days to Delivery'].mean().round(1).reset_index()
+
+                # Pivot for heatmap display
+                city_heatmap_df = city_avg_df.pivot_table(index='City', columns='Site', values='Days to Delivery').reindex(columns=selected_sites)
+                
+                # Apply conditional highlighting: Green for minimum/fastest delivery in each row (city)
+                st.dataframe(style_city_heatmap_df(city_heatmap_df, selected_sites), width='stretch')
+                
+            # --- Detailed Pincode Comparison ---
+            st.subheader("🚚 Detailed Delivery Speed Comparison by Pincode (in Days)")
             pivoted_df = display_df.pivot_table(index='Pincode', columns='Site', values='Days to Delivery').reindex(columns=selected_sites)
             st.dataframe(style_comparison_df(pivoted_df, selected_sites), width='stretch')
 
